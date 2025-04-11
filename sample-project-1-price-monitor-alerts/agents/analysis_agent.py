@@ -27,7 +27,7 @@ AGENT_PORT = int(os.getenv("ANALYSIS_AGENT_PORT", "8002"))
 AGENT_ENDPOINT = f"http://localhost:{AGENT_PORT}/submit"
 
 # Price agent address (this would be set after the price agent is running)
-PRICE_AGENT_ADDRESS = os.getenv("PRICE_AGENT_ADDRESS", "")
+PRICE_AGENT_ADDRESS = os.getenv("PRICE_AGENT_ADDRESS", "agent1qtawh5k0a6uns5dwa3sgf0gff945prv3zc44yvvlj0yv8utlt5h6xq89qm8")
 
 # Create the agent
 analysis_agent = Agent(
@@ -253,7 +253,9 @@ async def analyze_price_data(ctx: Context, symbol: str) -> Optional[AnalysisResu
         AnalysisResult object or None if analysis fails
     """
     # Get historical data from storage
-    historical_data = ctx.storage.get("historical_data", {})
+    historical_data = ctx.storage.get("historical_data")
+    if historical_data is None:
+        historical_data = {}
     
     if symbol not in historical_data or not historical_data[symbol]:
         ctx.logger.warning(f"No historical data available for {symbol}")
@@ -325,6 +327,10 @@ async def startup(ctx: Context):
     if not ctx.storage.get("historical_data"):
         ctx.storage.set("historical_data", {})
     
+    # Initialize storage for analysis results if it doesn't exist
+    if not ctx.storage.get("analysis_results"):
+        ctx.storage.set("analysis_results", {})
+    
     # Register with price agent if address is available
     if PRICE_AGENT_ADDRESS:
         ctx.logger.info(f"Registering with price agent at {PRICE_AGENT_ADDRESS}")
@@ -332,9 +338,15 @@ async def startup(ctx: Context):
         # Store the price agent address
         ctx.storage.set("price_agent_address", PRICE_AGENT_ADDRESS)
         
-        # We would need to implement a registration protocol
-        # This is a placeholder for that functionality
-        # await ctx.send(PRICE_AGENT_ADDRESS, RegisterRequest(agent_address=analysis_agent.address))
+        # Request initial price data for default cryptocurrencies
+        default_cryptos = os.getenv("DEFAULT_CRYPTOCURRENCIES", "BTC,ETH,SOL,AVAX,DOT").split(",")
+        ctx.logger.info(f"Requesting initial price data for: {', '.join(default_cryptos)}")
+        
+        try:
+            # Request price data from price agent
+            await ctx.send(PRICE_AGENT_ADDRESS, PriceRequest(symbols=default_cryptos))
+        except Exception as e:
+            ctx.logger.error(f"Error requesting initial price data: {e}")
 
 
 @analysis_agent.on_message(model=PriceUpdate)
@@ -348,7 +360,9 @@ async def handle_price_update(ctx: Context, sender: str, msg: PriceUpdate):
     ctx.logger.info(f"Received price update for {symbol}: ${price_data.price:.2f}")
     
     # Update historical data
-    historical_data = ctx.storage.get("historical_data", {})
+    historical_data = ctx.storage.get("historical_data")
+    if historical_data is None:
+        historical_data = {}
     
     if symbol not in historical_data:
         historical_data[symbol] = []
@@ -375,7 +389,9 @@ async def handle_price_update(ctx: Context, sender: str, msg: PriceUpdate):
         ctx.logger.info(f"Analysis for {symbol}: {analysis_result}")
         
         # Store the analysis result
-        analysis_results = ctx.storage.get("analysis_results", {})
+        analysis_results = ctx.storage.get("analysis_results")
+        if analysis_results is None:
+            analysis_results = {}
         analysis_results[symbol] = analysis_result.dict()
         ctx.storage.set("analysis_results", analysis_results)
         
@@ -395,7 +411,9 @@ async def handle_price_response(ctx: Context, sender: str, msg: PriceResponse):
     ctx.logger.info(f"Received price response from {sender} with {len(msg.prices)} symbols")
     
     # Update historical data with the received prices
-    historical_data = ctx.storage.get("historical_data", {})
+    historical_data = ctx.storage.get("historical_data")
+    if historical_data is None:
+        historical_data = {}
     
     for symbol, price_data in msg.prices.items():
         if symbol not in historical_data:
@@ -415,25 +433,34 @@ async def handle_price_response(ctx: Context, sender: str, msg: PriceResponse):
     
     # Save the updated historical data
     ctx.storage.set("historical_data", historical_data)
+    ctx.logger.info(f"Updated historical data for {len(msg.prices)} symbols")
     
-    # Perform analysis on each symbol
+    # Perform analysis on each symbol and send results to user agent and alert agent
+    analysis_results = []
     for symbol in msg.prices.keys():
         analysis_result = await analyze_price_data(ctx, symbol)
         
         if analysis_result:
             ctx.logger.info(f"Analysis for {symbol}: {analysis_result}")
+            analysis_results.append(analysis_result)
             
             # Store the analysis result
-            analysis_results = ctx.storage.get("analysis_results", {})
-            analysis_results[symbol] = analysis_result.dict()
-            ctx.storage.set("analysis_results", analysis_results)
+            analysis_results_dict = ctx.storage.get("analysis_results")
+            if analysis_results_dict is None:
+                analysis_results_dict = {}
+            analysis_results_dict[symbol] = analysis_result.dict()
+            ctx.storage.set("analysis_results", analysis_results_dict)
             
-            # Broadcast the analysis result to alert agent
-            # This would be implemented if we had an alert agent address
-            alert_agent_address = ctx.storage.get("alert_agent_address")
+            # Send the analysis result to alert agent
+            alert_agent_address = os.getenv("ALERT_AGENT_ADDRESS")
             if alert_agent_address:
                 ctx.logger.info(f"Sending analysis result for {symbol} to alert agent")
                 await ctx.send(alert_agent_address, analysis_result)
+    
+    # If we have any analysis results and the request came from the user agent,
+    # send them back to the user agent
+    if analysis_results and sender == os.getenv("USER_AGENT_ADDRESS"):
+        await ctx.send(sender, AnalysisResponse(results=analysis_results))
 
 
 @analysis_protocol.on_message(model=AnalysisRequest, replies={AnalysisResponse})

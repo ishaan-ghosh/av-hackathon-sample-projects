@@ -38,9 +38,9 @@ AGENT_PORT = int(os.getenv("USER_AGENT_PORT", "8004"))
 AGENT_ENDPOINT = f"http://localhost:{AGENT_PORT}/submit"
 
 # Other agent addresses (these would be set after the other agents are running)
-PRICE_AGENT_ADDRESS = os.getenv("PRICE_AGENT_ADDRESS", "")
-ANALYSIS_AGENT_ADDRESS = os.getenv("ANALYSIS_AGENT_ADDRESS", "")
-ALERT_AGENT_ADDRESS = os.getenv("ALERT_AGENT_ADDRESS", "")
+PRICE_AGENT_ADDRESS = os.getenv("PRICE_AGENT_ADDRESS", "agent1qtawh5k0a6uns5dwa3sgf0gff945prv3zc44yvvlj0yv8utlt5h6xq89qm8")
+ANALYSIS_AGENT_ADDRESS = os.getenv("ANALYSIS_AGENT_ADDRESS", "agent1qg82vxu3xpkle6tjgckmnf6t7u8jswk775yfytsasyd3q35cyue8zwdnzzr")
+ALERT_AGENT_ADDRESS = os.getenv("ALERT_AGENT_ADDRESS", "agent1qd5ww7ul24ma54s4lqnv9sy42csqergzc9a4x0dpmwnl242hp54ewfsk6ay")
 
 # Create the agent
 user_agent = Agent(
@@ -90,7 +90,9 @@ async def handle_alert_notification(ctx: Context, sender: str, msg: AlertNotific
     ctx.logger.info(f"Received alert notification: {msg}")
     
     # Store the received alert
-    received_alerts = ctx.storage.get("received_alerts", [])
+    received_alerts = ctx.storage.get("received_alerts")
+    if received_alerts is None:
+        received_alerts = []
     received_alerts.append(msg.dict())
     
     # Keep only the last 100 alerts to avoid excessive storage
@@ -100,7 +102,9 @@ async def handle_alert_notification(ctx: Context, sender: str, msg: AlertNotific
     ctx.storage.set("received_alerts", received_alerts)
     
     # Check if notifications are enabled
-    preferences = ctx.storage.get("preferences", {})
+    preferences = ctx.storage.get("preferences")
+    if preferences is None:
+        preferences = {}
     if preferences.get("notification_enabled", True):
         # In a real application, this could send a notification to the user
         # via email, SMS, push notification, etc.
@@ -130,7 +134,9 @@ async def handle_analysis_response(ctx: Context, sender: str, msg: AnalysisRespo
     ctx.logger.info(f"Received analysis results from {sender} for {len(msg.results)} cryptocurrencies")
     
     # Store the latest analysis results
-    analysis_results = ctx.storage.get("analysis_results", {})
+    analysis_results = ctx.storage.get("analysis_results")
+    if analysis_results is None:
+        analysis_results = {}
     
     for result in msg.results:
         analysis_results[result.symbol] = result.dict()
@@ -260,7 +266,9 @@ async def check_status(ctx: Context):
     Periodically check the status of the system and request updates.
     """
     # Get user preferences
-    preferences = ctx.storage.get("preferences", {})
+    preferences = ctx.storage.get("preferences")
+    if preferences is None:
+        preferences = {}
     cryptocurrencies = preferences.get("cryptocurrencies", ["BTC", "ETH"])
     
     # Request price data for all cryptocurrencies

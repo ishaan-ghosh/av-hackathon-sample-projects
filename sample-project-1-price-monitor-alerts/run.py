@@ -70,6 +70,12 @@ def start_agent(agent_key: str) -> subprocess.Popen:
     # Prepare environment variables for the agent
     env = os.environ.copy()
     
+    # Add the current directory to PYTHONPATH to allow imports from the project root
+    if 'PYTHONPATH' in env:
+        env['PYTHONPATH'] = f"{os.getcwd()}:{env['PYTHONPATH']}"
+    else:
+        env['PYTHONPATH'] = os.getcwd()
+    
     # Add agent addresses to environment
     for dep in agent_info['dependencies']:
         env[f"{dep.upper()}_AGENT_ADDRESS"] = agent_addresses[dep]
@@ -101,7 +107,11 @@ def monitor_agent_output(agent_key: str, process: subprocess.Popen):
     # Read the output line by line
     for line in iter(process.stdout.readline, ''):
         # Print the output
-        if args.debug or "address" in line.lower():
+        if args.debug:
+            # In debug mode, print all output
+            print(f"[{agent_info['name']}] {line.strip()}")
+        elif "address" in line.lower() or "price" in line.lower() or "alert" in line.lower() or "notification" in line.lower():
+            # In regular mode, print only important information
             print(f"[{agent_info['name']}] {line.strip()}")
         
         # Extract the agent address
@@ -109,7 +119,7 @@ def monitor_agent_output(agent_key: str, process: subprocess.Popen):
             # Find the agent address in the output
             parts = line.split()
             for i, part in enumerate(parts):
-                if part.lower() == "address:":
+                if part.lower().startswith("address:"):
                     if i + 1 < len(parts):
                         address = parts[i + 1]
                         agent_addresses[agent_key] = address
@@ -151,8 +161,8 @@ def start_agents(agent_keys: List[str]):
                 thread.daemon = True
                 thread.start()
                 
-                # Wait a bit for the agent to start and print its address
-                time.sleep(2)
+                # Wait longer for the agent to start and print its address
+                time.sleep(5)
 
 
 def main():

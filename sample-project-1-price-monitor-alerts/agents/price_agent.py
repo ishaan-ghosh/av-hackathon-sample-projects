@@ -21,7 +21,7 @@ AGENT_ENDPOINT = f"http://localhost:{AGENT_PORT}/submit"
 UPDATE_INTERVAL = int(os.getenv("PRICE_UPDATE_INTERVAL", "300"))  # Default: 5 minutes
 
 # API configuration
-COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY", "")
+# Using free CoinGecko API (no API key required)
 DEFAULT_CRYPTOCURRENCIES = os.getenv("DEFAULT_CRYPTOCURRENCIES", "BTC,ETH,SOL,AVAX,DOT").split(",")
 
 # Create the agent
@@ -51,11 +51,22 @@ async def fetch_crypto_prices(symbols: List[str]) -> Dict[str, PriceData]:
     Returns:
         Dictionary mapping symbols to PriceData objects
     """
-    # Convert symbols to lowercase for API compatibility
-    symbols_lower = [s.lower() for s in symbols]
+    # Map symbols to CoinGecko IDs
+    symbol_to_id = {
+        "BTC": "bitcoin",
+        "ETH": "ethereum",
+        "SOL": "solana",
+        "AVAX": "avalanche-2",
+        "DOT": "polkadot",
+        "FET": "fetch-ai",
+        "ADA": "cardano"
+    }
     
-    # Join symbols with commas for API request
-    symbols_str = ",".join(symbols_lower)
+    # Get CoinGecko IDs for the symbols
+    coin_ids = [symbol_to_id.get(s, s.lower()) for s in symbols]
+    
+    # Join coin IDs with commas for API request
+    symbols_str = ",".join(coin_ids)
     
     # CoinGecko API endpoint
     url = f"https://api.coingecko.com/api/v3/simple/price"
@@ -70,12 +81,8 @@ async def fetch_crypto_prices(symbols: List[str]) -> Dict[str, PriceData]:
         "include_last_updated_at": "true",
     }
     
-    # Add API key if available
-    if COINGECKO_API_KEY:
-        params["x_cg_pro_api_key"] = COINGECKO_API_KEY
-    
     try:
-        # Make the API request
+        # Make the API request using free CoinGecko API
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()  # Raise an exception for HTTP errors
         
@@ -84,7 +91,7 @@ async def fetch_crypto_prices(symbols: List[str]) -> Dict[str, PriceData]:
         
         # Create PriceData objects for each symbol
         result = {}
-        for symbol, coin_id in zip(symbols, symbols_lower):
+        for symbol, coin_id in zip(symbols, coin_ids):
             if coin_id in data:
                 coin_data = data[coin_id]
                 result[symbol] = PriceData(
@@ -99,7 +106,8 @@ async def fetch_crypto_prices(symbols: List[str]) -> Dict[str, PriceData]:
         return result
     
     except requests.exceptions.RequestException as e:
-        price_agent.logger.error(f"Error fetching prices: {e}")
+        # Use print for logging outside of a context
+        print(f"Error fetching prices: {e}")
         return {}
 
 
@@ -126,7 +134,9 @@ async def update_prices(ctx: Context):
     Fetch and broadcast updated cryptocurrency prices at regular intervals.
     """
     # Get the list of cryptocurrencies to monitor
-    monitored_cryptos = ctx.storage.get("monitored_cryptos", DEFAULT_CRYPTOCURRENCIES)
+    monitored_cryptos = ctx.storage.get("monitored_cryptos")
+    if monitored_cryptos is None:
+        monitored_cryptos = DEFAULT_CRYPTOCURRENCIES
     
     ctx.logger.info(f"Fetching prices for: {', '.join(monitored_cryptos)}")
     
@@ -142,7 +152,9 @@ async def update_prices(ctx: Context):
         ctx.logger.info(f"{symbol}: ${price_data.price:.2f} ({price_data.percent_change_24h:+.2f}% 24h)")
     
     # Update historical data
-    historical_data = ctx.storage.get("historical_data", {})
+    historical_data = ctx.storage.get("historical_data")
+    if historical_data is None:
+        historical_data = {}
     timestamp = datetime.utcnow().isoformat()
     
     for symbol, price_data in prices.items():
@@ -164,18 +176,26 @@ async def update_prices(ctx: Context):
     # Save the updated historical data
     ctx.storage.set("historical_data", historical_data)
     
-    # Broadcast price updates to subscribed agents
-    subscribed_agents = ctx.storage.get("subscribed_agents", [])
-    
-    for agent_address in subscribed_agents:
-        for symbol, price_data in prices.items():
-            await ctx.send(agent_address, PriceUpdate(data=price_data))
-    
     # Create a price response for all prices
     response = PriceResponse.create(prices=prices, source="CoinGecko")
     
     # Store the latest prices
     ctx.storage.set("latest_prices", response.dict())
+    
+    # Always send updates to the analysis agent
+    analysis_agent_address = os.getenv("ANALYSIS_AGENT_ADDRESS")
+    if analysis_agent_address:
+        ctx.logger.info(f"Sending price update to analysis agent at {analysis_agent_address}")
+        await ctx.send(analysis_agent_address, response)
+    
+    # Broadcast individual price updates to subscribed agents
+    subscribed_agents = ctx.storage.get("subscribed_agents")
+    if subscribed_agents is None:
+        subscribed_agents = []
+    
+    for agent_address in subscribed_agents:
+        for symbol, price_data in prices.items():
+            await ctx.send(agent_address, PriceUpdate(data=price_data))
 
 
 @price_protocol.on_message(model=PriceRequest, replies={PriceResponse})
